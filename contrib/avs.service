@@ -1,0 +1,14 @@
+# systemd user unit. Install:  sed "s|@DIR@|$PWD|g" contrib/avs.service > ~/.config/systemd/user/avs.service
+#                              systemctl --user daemon-reload && systemctl --user enable --now avs
+[Unit]
+Description=AVS (Agent View and Send)
+After=network-online.target
+
+[Service]
+ExecStart=@DIR@/.venv/bin/python -m avs.server
+WorkingDirectory=@DIR@
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

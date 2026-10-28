@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>AVS</title><link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/static/icon.svg">
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#14181d;--mute:#5d6875;--line:#d9dee5;--acc:#1a73e8}
+@media (prefers-color-scheme:dark){:root{--bg:#101418;--card:#1a2027;--ink:#e8edf2;--mute:#94a1b0;--line:#2b343e;--acc:#6cb6ff}}
+*{box-sizing:border-box}[hidden]{display:none!important}html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,sans-serif;display:flex;flex-direction:column}
+main{flex:1;min-height:0;overflow:auto}
+nav{display:flex;border-top:1px solid var(--line);background:var(--card);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;padding:14px 8px;border:0;background:none;color:var(--mute);font:inherit;font-weight:600}
+nav button[aria-selected=true]{color:var(--acc);box-shadow:inset 0 3px var(--acc)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--acc);margin-left:6px;visibility:hidden}.dot.on{visibility:visible}
+#view{display:flex;flex-direction:column;height:100%}#bar{padding:6px 8px 6px 6px;min-height:46px;border-bottom:1px solid var(--line);background:var(--card);color:var(--ink);font-size:15px;display:flex;gap:6px;align-items:center}
+#bar #title{flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:6px}#bar #burger+#title{padding-left:0;text-align:center}
+html.app #bar{display:none}
+#pos{color:var(--mute);font-size:13px;white-space:nowrap}#burger,#open{flex:0 0 auto;width:38px;height:38px;display:flex;align-items:center;justify-content:center;border:0;border-radius:9px;background:none;color:var(--ink);font-size:22px;line-height:1;text-decoration:none}#open{color:var(--acc);font-size:20px}#burger:active,#open:active{background:var(--bg)}
+iframe{flex:1;width:100%;border:0;background:#fff}.empty{padding:48px 24px;text-align:center;color:var(--mute)}
+section{padding:12px 16px}h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);margin:12px 0 8px}
+.row{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px}
+.row a{flex:1;min-width:0;color:var(--ink);text-decoration:none;overflow:hidden}.row .name{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.row small{display:block;color:var(--mute);font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row button,.btn{border:1px solid var(--line);background:none;color:var(--mute);border-radius:8px;padding:6px 10px;font:inherit}
+.btn{background:var(--acc);color:#fff;border:0;padding:12px 18px;font-weight:600;width:100%}
+#drop{border:2px dashed var(--line);border-radius:12px;padding:18px;text-align:center;color:var(--mute);margin-bottom:10px}#drop.over{border-color:var(--acc);color:var(--acc)}
+#ptr{position:fixed;left:50%;top:0;transform:translate(-50%,-48px);z-index:5;background:var(--card);color:var(--mute);border:1px solid var(--line);border-radius:20px;padding:8px 16px;font-size:14px;box-shadow:0 2px 8px #0003;pointer-events:none;transition:transform .15s}#ptr.go{color:var(--acc)}
+#bar{touch-action:none;user-select:none}
+#msg{padding:0 16px;color:var(--mute);font-size:14px;min-height:20px}
+</style></head><body>
+<div id="ptr">Pull down to refresh</div>
+<main id="main">
+ <div id="view" role="tabpanel"><div id="bar"><button id="burger" aria-label="Contents" hidden>&#9776;</button><span id="title">Nothing shown yet</span><span id="pos"></span><a id="open" href="#" target="_blank" rel="noopener" title="Open in browser" aria-label="Open in browser" hidden>&#8599;</a></div>
+  <div id="empty" class="empty">When your agent shows you something, it appears here.</div><iframe id="frame" hidden sandbox="allow-scripts allow-forms allow-popups allow-downloads allow-modals"></iframe></div>
+ <div id="files" role="tabpanel" hidden>
+  <section><h2>Send to your agent</h2><div id="drop">Drop files here</div>
+   <label class="btn" style="display:block;text-align:center">Choose files<input id="pick" type="file" multiple hidden></label><div id="msg"></div><div id="inbox"></div></section>
+  <section><h2>From your agent</h2><div id="outbox"></div></section>
+ </div>
+</main>
+<nav><button id="tv" aria-selected="true">View<span class="dot" id="dv"></span></button><button id="tf" aria-selected="false">Files<span class="dot" id="df"></span></button></nav>
+<script>
+const $=id=>document.getElementById(id);let tab="view",rev=0,seen={out:-1,view:0},last=null,lastBar="",cur={};      // cur: the page and scroll position the framed reader reports, so a live update can come back to the same place
+const liveSrc=src=>cur.file?src.slice(0,src.lastIndexOf("/")+1)+cur.file+(cur.y>0?"#avsy="+cur.y:""):src;
+if(window.AVSApp&&AVSApp.bar)document.documentElement.classList.add("app");      // the Android app has its own title bar: it shows this one's content
+const TABS={view:["tv","dv"],files:["tf","df"]};
+function show(t){tab=t;for(const k in TABS){$(k).hidden=k!==t;$(TABS[k][0]).setAttribute("aria-selected",k===t)}
+ if(TABS[t][1])$(TABS[t][1]).classList.remove("on");if(last)render(last,true);pushBar()}
+$("tv").onclick=()=>show("view");$("tf").onclick=()=>show("files");
+const sz=n=>n>1e9?(n/1e9).toFixed(1)+" GB":n>1e6?(n/1e6).toFixed(1)+" MB":Math.max(1,Math.round(n/1e3))+" KB";
+const esc=s=>s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const dt=t=>t?new Date(t*1000).toLocaleString([],{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"}):"";
+function viewUrl(v){return v.kind==="url"?v.url:v.src||""}
+function rows(box,list){return list.length?list.map(f=>`<div class="row"><a href="/api/files/${box}/${encodeURIComponent(f.name)}" download><span class="name">${esc(f.name)}</span><small>${sz(f.size)}${(f.created||f.time)?" · "+dt(f.created||f.time):""}</small></a>${box==="outbox"&&window.AVSApp&&/\.apk$/i.test(f.name)?`<button data-i="${esc(f.name)}" style="color:var(--acc);border-color:var(--acc)">Install</button>`:""}<button data-b="${box}" data-n="${esc(f.name)}">Delete</button></div>`).join(""):`<div class="row"><small>Nothing yet</small></div>`}
+function render(s,force){last=s;const v=s.view,src=viewUrl(v);
+ if(v.rev!==seen.view||force&&!$("frame").src){ if(v.rev!==seen.view&&seen.view&&tab!=="view")$("dv").classList.add("on");
+  seen.view=v.rev;if(!v.live)cur={};$("title").textContent=v.title||"Nothing shown yet";$("pos").textContent="";$("burger").hidden=true;$("empty").hidden=!!src;$("frame").hidden=!src;
+  if(src&&$("frame").dataset.rev!==String(v.rev)){$("frame").dataset.rev=v.rev;$("frame").src=v.live?liveSrc(src):src}
+  $("open").hidden=!src;if(src)$("open").href=src}
+ const sig=s.outbox.map(f=>f.name+f.time).join();if(sig!==seen.sig){if(seen.sig!==undefined&&tab!=="files"&&s.outbox.length)$("df").classList.add("on");seen.sig=sig}
+ $("outbox").innerHTML=rows("outbox",s.outbox);$("inbox").innerHTML=rows("inbox",s.inbox);pushBar()}
+// Tell the Android app what its title bar should show (title, position, whether there is a contents menu, the address to open in a browser).
+function pushBar(){if(!(window.AVSApp&&AVSApp.bar))return;let t="Files",p="",n=false,u="";
+ if(tab!=="files"){t=$("title").textContent;p=$("pos").textContent;n=!$("burger").hidden;const o=$("open");u=o.hidden?"":o.href}
+ const k=[t,p,n,u].join("\u0001");if(k===lastBar)return;lastBar=k;AVSApp.bar(t,p,n,u)}
+addEventListener("message",e=>{const f=$("frame"),m=e.data;if(e.source!==f.contentWindow||!m)return;
+ if(m.avs==="scroll"){cur={file:m.file,y:m.y};return}
+ if(m.avs==="comments?"){fetch("/api/comments?page="+encodeURIComponent(m.page),{cache:"no-store"}).then(r=>r.ok?r.json():{}).then(d=>f.contentWindow&&f.contentWindow.postMessage({avs:"comments",data:d},"*")).catch(()=>{});return}
+ if(m.avs==="comment"){const reply=o=>f.contentWindow&&f.contentWindow.postMessage({avs:"commented",item:m.item,...o},"*");
+  fetch("/api/comments",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({page:m.page,src:m.src,title:m.title,item:m.item,text:m.text})})
+   .then(async r=>reply(r.ok?{ok:true}:{ok:false,error:await r.text()})).catch(()=>reply({ok:false,error:"could not reach the PC"}));return}if(m.avs!=="page")return;cur={file:m.file,y:0};
+ if(m.title)$("title").textContent=m.title;$("pos").textContent=m.pos&&+m.count>1?m.pos+" / "+m.count:"";$("burger").hidden=!m.nav;pushBar()});
+$("burger").onclick=()=>{const f=$("frame");if(f.contentWindow)f.contentWindow.postMessage({avs:"toggle"},"*")};window.avsMenu=()=>$("burger").onclick();
+let pollTimer=null;
+async function poll(){clearTimeout(pollTimer);if(document.hidden)return;                       // hidden (the app is in the background): no requests at all; alerts come through ntfy
+ try{const r=await fetch("/api/state");if(r.ok)render(await r.json())}catch(e){}pollTimer=setTimeout(poll,2000)}
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)poll()});
+document.addEventListener("click",e=>{const i=e.target.closest("button[data-i]");if(i)window.AVSApp.install(i.dataset.i)});   // the Android app downloads it and opens the system installer
+document.addEventListener("click",async e=>{const b=e.target.closest("button[data-b]");if(!b)return;
+ if(confirm("Delete "+b.dataset.n+"?")){await fetch(`/api/files/${b.dataset.b}/${encodeURIComponent(b.dataset.n)}`,{method:"DELETE"});poll()}});
+async function up(files){if(!files.length)return;const fd=new FormData();for(const f of files)fd.append("files",f);$("msg").textContent="Sending "+files.length+" file(s)…";
+ try{const r=await fetch("/api/upload",{method:"POST",body:fd});$("msg").textContent=r.ok?"Sent: "+(await r.json()).saved.join(", "):"Failed: "+await r.text()}catch(e){$("msg").textContent="Failed: "+e}}
+$("pick").onchange=e=>{up([...e.target.files]);e.target.value=""};
+const d=$("drop");["dragover","dragenter"].forEach(n=>d.addEventListener(n,e=>{e.preventDefault();d.classList.add("over")}));
+["dragleave","drop"].forEach(n=>d.addEventListener(n,e=>{e.preventDefault();d.classList.remove("over")}));d.addEventListener("drop",e=>up([...e.dataTransfer.files]));
+
+// Pull down to refresh: pull the title bar (View) or the top of the Files list; release past the line to refresh.
+(function(){const ptr=$("ptr"),LINE=70;let y0=null,dy=0,busy=false;
+ function atTop(t){return t.closest("#bar")||(tab==="files"&&$("main").scrollTop<=0&&t.closest("#files"))}
+ function pos(d){ptr.style.transition="none";ptr.style.transform=`translate(-50%,${Math.min(d,LINE+30)-48+8}px)`;const go=d>=LINE;ptr.classList.toggle("go",go);ptr.textContent=go?"Release to refresh":"Pull down to refresh"}
+ function rest(msg){ptr.style.transition="transform .15s";ptr.classList.remove("go");if(msg){ptr.textContent=msg;ptr.style.transform="translate(-50%,8px)";setTimeout(()=>ptr.style.transform="translate(-50%,-48px)",900)}else ptr.style.transform="translate(-50%,-48px)"}
+ async function refresh(){busy=true;ptr.textContent="Refreshing…";ptr.style.transition="transform .15s";ptr.style.transform="translate(-50%,8px)";
+  try{const r=await fetch("/api/state",{cache:"no-store"});if(r.ok){const st=await r.json();render(st,true);const f=$("frame");if(tab==="view"&&!f.hidden&&f.src){f.src=viewUrl(st.view)}}rest("Refreshed")}catch(e){rest("Could not reach the PC")}busy=false}
+ window.avsRefresh=()=>{if(!busy)refresh()};                                    // the Android title bar calls this when pulled down
+ document.addEventListener("touchstart",e=>{y0=!busy&&e.touches.length===1&&atTop(e.target)?e.touches[0].clientY:null;dy=0},{passive:true});
+ document.addEventListener("touchmove",e=>{if(y0===null)return;dy=e.touches[0].clientY-y0;if(dy>0){if(e.cancelable)e.preventDefault();pos(dy*.6)}else{y0=null;rest()}},{passive:false});
+ document.addEventListener("touchend",()=>{if(y0===null)return;const go=dy*.6>=LINE;y0=null;go?refresh():rest()});
+ document.addEventListener("touchcancel",()=>{y0=null;rest()})})();
+if(location.hash==="#files")show("files");
+poll();
+</script></body></html>
