@@ -330,6 +330,24 @@ def test_pairing_link(env):
     assert link.startswith("avs://pair?") and cfg["token"] in link and cfg["topic"] in link
 
 
+def test_tunnel_only_closes_the_home_network_and_drops_the_lan_address(env):
+    cfg, root, _ = env
+    assert not cfg.get("tunnel_only") and "lan=" in core.pairing_link(cfg)               # the default is unchanged
+    assert core.allowed("192.168.1.20", cfg) and core.allowed("127.0.0.1", cfg)
+    closed = {**cfg, "tunnel_only": True}
+    assert core.allowed("127.0.0.1", closed) and core.allowed("::1", closed) and core.allowed("::ffff:127.0.0.1", closed)   # the tunnel arrives from this PC
+    for ip in ("192.168.1.20", "10.0.0.5", "172.16.3.3", "fd00::1", "8.8.8.8"):
+        assert not core.allowed(ip, closed), ip
+    link = core.pairing_link(closed)
+    assert "lan=" not in link and "token=" in link and "topic=" in link                  # the phone is given only the tunnel
+    with pytest.raises(ValueError):
+        core.pairing_link({**closed, "relay": False})                                    # no tunnel and no home network: nothing to pair with
+    other = TestClient(server.make_app(closed), client=("192.168.1.20", 1))
+    other.cookies.set("avs", cfg["token"])
+    assert other.get("/api/ping").status_code == 403                                    # a phone with the old home address gets nothing
+    assert TestClient(server.make_app(closed), client=("127.0.0.1", 1)).get("/api/ping").status_code == 200
+
+
 def test_passthrough_to_local_page(env):
     import http.server, threading
     c = authed(env); cfg, root, _ = env

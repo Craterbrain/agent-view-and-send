@@ -25,6 +25,7 @@ DEFAULTS = {
     "ntfy": "https://ntfy.sh",       # where the tunnel address is posted (to a secret topic only the paired phone knows)
     # Who may connect directly: this machine and the home network. Tunnel traffic arrives from this machine, so the access token is the guard.
     "allow": ["127.0.0.0/8", "::1/128", "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "fe80::/10", "fd00::/8"],
+    "tunnel_only": False,            # True = never answer on the home network (plain http there): serve this PC only, and the phone uses the https tunnel everywhere. Needs "relay"; re-pair after changing it
     "max_upload_mb": 2048,
     "outbox_keep_days": 0,           # 0 = never delete anything; N = the server removes outbox files older than N days (also `avs clean`)
 }
@@ -54,12 +55,15 @@ def root_of(cfg: dict) -> Path:
     return r
 
 
+LOOPBACK = ["127.0.0.0/8", "::1/128"]
+
+
 def allowed(ip: str, cfg: dict) -> bool:
     try:
         a = ipaddress.ip_address(ip.split("%")[0])
         if getattr(a, "ipv4_mapped", None):
             a = a.ipv4_mapped
-        return any(a in ipaddress.ip_network(n, strict=False) for n in cfg["allow"])
+        return any(a in ipaddress.ip_network(n, strict=False) for n in (LOOPBACK if cfg.get("tunnel_only") else cfg["allow"]))
     except ValueError:
         return False
 
@@ -197,8 +201,11 @@ def lan_address() -> str:
 def pairing_link(cfg: dict) -> str:
     """What the QR code holds. The Android app reads it once and keeps it."""
     from urllib.parse import urlencode
-    lan = f"http://{cfg['lan_host'] or lan_address()}:{cfg['port']}"
-    q = {"lan": lan, "token": cfg["token"]}
+    if cfg.get("tunnel_only") and not cfg["relay"]:
+        raise ValueError('"tunnel_only" needs "relay": true, or the phone has no way to reach the PC.')
+    q = {"token": cfg["token"]}
+    if not cfg.get("tunnel_only"):                    # tunnel only: no home-network address, so the phone never tries plain http
+        q["lan"] = f"http://{cfg['lan_host'] or lan_address()}:{cfg['port']}"
     if cfg["relay"]:
         q.update(topic=cfg["topic"], ntfy=cfg["ntfy"])
     return "avs://pair?" + urlencode(q)

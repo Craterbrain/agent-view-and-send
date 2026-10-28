@@ -140,6 +140,8 @@ def main(argv=None):
         elif a.cmd == "status":
             st = core.get_state(root)
             print(f"folder {root}\nshowing {st.get('title') or 'nothing'}\noutbox {len(core.listing(root, 'outbox'))} files, inbox {len(core.listing(root, 'inbox'))} files")
+            print("phone connects: " + ("through the https tunnel only (the home network is closed)" if cfg.get("tunnel_only")
+                  else "on the home network first (plain http, not encrypted), else through the https tunnel"))
             print("alerts: " + ("through UnifiedPush (the ntfy app on the phone)" if cfg.get("push_endpoint") else "through the ntfy topic (the app's own listener)"))
         elif a.cmd == "serve":
             from . import server

@@ -211,6 +211,8 @@ def main():
     import uvicorn
     from . import relay
     cfg = core.load_config()
+    if cfg.get("tunnel_only") and not cfg["relay"]:
+        raise SystemExit('avs: "tunnel_only" needs "relay": true, or nothing could reach this PC.')
 
     def sweep():                                    # opt-in: outbox_keep_days > 0 in the config; re-read each time so a change applies at once
         while True:
@@ -223,7 +225,7 @@ def main():
     threading.Thread(target=sweep, daemon=True).start()
     if cfg["relay"]:
         threading.Thread(target=relay.run_forever, args=(cfg, threading.Event()), daemon=True).start()
-    uvicorn.run(make_app(cfg), host="0.0.0.0", port=cfg["port"], log_level="warning", proxy_headers=False)
+    uvicorn.run(make_app(cfg), host="127.0.0.1" if cfg.get("tunnel_only") else "0.0.0.0", port=cfg["port"], log_level="warning", proxy_headers=False)
 
 
 if __name__ == "__main__":
