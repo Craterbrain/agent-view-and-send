@@ -85,6 +85,14 @@ AVS gives a paired phone access to a folder on your PC and lets an agent put pag
   code contain it: treat them like a password. The tunnel address is public but useless without the token.
 - **Who can connect.** Direct connections are limited to this PC and private home-network addresses (`allow` in the config). Away from home, traffic arrives through
   the tunnel from this machine, so the token is the only guard there.
+- **Encryption: not end to end, and not on the home network.** The access token is a password, not an encryption key; it does not encrypt anything. On the home
+  network the phone talks to the PC over plain `http://`, which is **not encrypted**: anyone on the same Wi-Fi who can capture traffic can read it, including the token.
+  Away from home the address is `https://…trycloudflare.com`, so the phone-to-Cloudflare leg is TLS, but Cloudflare ends the encryption and relays to your PC, so
+  Cloudflare can see what passes through, token included. For real end-to-end encryption put the PC and phone on something like WireGuard or Tailscale and serve HTTPS
+  yourself; AVS does not do that.
+- **Tunnel only (opt-in).** If you would rather never use plain http, set `"tunnel_only": true` in `~/.config/avs/config.json`, restart the service and run `avs pair`
+  again. The PC then listens on itself only (nothing on the home network can connect), the pairing link carries no home-network address, and the phone always uses the
+  https tunnel. It needs cloudflared and `"relay": true`, is slower, and trusts Cloudflare as above. `avs status` says which mode is on. The default is unchanged.
 - **Only show pages you trust.** A page the agent shows runs in a sandboxed iframe with no cookies and no access to the app's API, but its address contains the token
   (that is how its relative links work). A malicious page's script could use that address to make GET requests through the pass-through to any port on this PC except
   AVS's own, and to read the ones you gave it with `--api`. Treat what you `avs show` as code you are running.
