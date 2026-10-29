@@ -82,7 +82,8 @@ img{max-width:100%;height:auto;border-radius:8px}hr{border:0;border-top:1px soli
 .chapnav{display:flex;gap:12px;max-width:34rem;margin:0 auto;padding:12px 22px 60px}
 .chapnav a{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;text-decoration:none;color:var(--fg);font-family:-apple-system,system-ui,sans-serif}
 .chapnav a:active{background:var(--card)}.chapnav a span{font-size:12px;color:var(--mut)}
-.chapnav a b{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chapnav a{overflow:hidden}.chapnav a b{font-size:14px;font-weight:600;line-height:1.3;max-width:100%;min-width:0;overflow:hidden;overflow-wrap:anywhere;
+ display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
 .chapnav a.next{text-align:right;align-items:flex-end}.chapnav .spacer{flex:1}
 ul.toc{list-style:none;padding:0;font-family:-apple-system,system-ui,sans-serif}ul.toc li{margin:.55em 0}ul.toc a{font-weight:600}
 """
