@@ -191,6 +191,20 @@ public class MainActivity extends Activity {
         barUrl = url == null ? "" : url;
     }
 
+    private HttpURLConnection open(String url, String cookie, long from) throws java.io.IOException {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setConnectTimeout(15000); c.setReadTimeout(20000);
+        if (cookie != null) c.setRequestProperty("Cookie", cookie);
+        if (from > 0) c.setRequestProperty("Range", "bytes=" + from + "-");
+        return c;
+    }
+
+    /** Shows progress on the page's Install button for this file; empty text puts the button back. */
+    private void showInstall(String name, String text) {
+        String js = "window.avsInstall&&avsInstall(" + org.json.JSONObject.quote(name) + "," + org.json.JSONObject.quote(text) + ")";
+        ui.post(() -> web.evaluateJavascript(js, null));
+    }
+
     /** Downloads an .apk from the PC's outbox straight into a package-installer session and lets the system ask to confirm. */
     private void installApk(String name) {
         if (base.isEmpty() || name == null || !name.toLowerCase().endsWith(".apk") || name.contains("/")) return;
@@ -199,29 +213,55 @@ public class MainActivity extends Activity {
             startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
             return;
         }
-        Toast.makeText(this, "Downloading " + name + "…", Toast.LENGTH_SHORT).show();
         final String b = base;
+        showInstall(name, "Downloading…");
         new Thread(() -> {
             android.content.pm.PackageInstaller pi = getPackageManager().getPackageInstaller();
             int id = -1;
             try {
                 String url = b + "/api/files/outbox/" + URLEncoder.encode(name, "UTF-8").replace("+", "%20");
-                HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
                 String cookie = CookieManager.getInstance().getCookie(url);
-                if (cookie != null) c.setRequestProperty("Cookie", cookie);
+                // The tunnel can drop a long transfer; keep the session open and carry on from the byte we reached with a Range request.
+                HttpURLConnection c = open(url, cookie, 0);
                 if (c.getResponseCode() != 200) throw new java.io.IOException("HTTP " + c.getResponseCode());
+                long total = c.getContentLengthLong(), got = 0;
                 id = pi.createSession(new android.content.pm.PackageInstaller.SessionParams(android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL));
                 try (android.content.pm.PackageInstaller.Session ses = pi.openSession(id)) {
-                    try (InputStream in = c.getInputStream(); OutputStream out = ses.openWrite("avs.apk", 0, c.getContentLengthLong())) {
-                        byte[] buf = new byte[1 << 16]; int n;
-                        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                    try (OutputStream out = ses.openWrite("avs.apk", 0, total)) {
+                        byte[] buf = new byte[1 << 16]; int shown = -1, fails = 0;
+                        while (total <= 0 || got < total) {
+                            try {
+                                if (c == null) {
+                                    c = open(url, cookie, got);
+                                    if (c.getResponseCode() != 206) throw new java.io.IOException("HTTP " + c.getResponseCode());
+                                }
+                                InputStream in = c.getInputStream();
+                                int n;
+                                while ((n = in.read(buf)) > 0) {
+                                    out.write(buf, 0, n); got += n; fails = 0;
+                                    int pct = total > 0 ? (int) (got * 100 / total) : -1;
+                                    if (pct != shown) { shown = pct; showInstall(name, pct >= 0 ? "Downloading " + pct + "%" : "Downloading " + (got >> 20) + " MB"); }
+                                }
+                                if (total <= 0 || got >= total) break;
+                                throw new java.io.IOException("connection closed early");
+                            } catch (java.io.IOException e) {
+                                if (c != null) c.disconnect();
+                                c = null;
+                                if (++fails > 20) throw e;
+                                showInstall(name, "Reconnecting… " + (total > 0 ? (int) (got * 100 / total) + "%" : ""));
+                                try { Thread.sleep(Math.min(5000, 500L * fails)); } catch (InterruptedException ie) { throw new java.io.IOException("interrupted"); }
+                            }
+                        }
                         ses.fsync(out);
+                        showInstall(name, "Installing…");
                     }
                     android.app.PendingIntent done = android.app.PendingIntent.getBroadcast(this, id,
                         new Intent(this, InstallResult.class).setPackage(getPackageName()), android.app.PendingIntent.FLAG_MUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
                     ses.commit(done.getIntentSender());
                 }
+                showInstall(name, "");   // the system installer takes over from here
             } catch (Exception e) {
+                showInstall(name, "");
                 if (id >= 0) try { pi.abandonSession(id); } catch (Exception ignored) {}
                 ui.post(() -> Toast.makeText(this, "Could not install: " + e.getMessage(), Toast.LENGTH_LONG).show());
             }

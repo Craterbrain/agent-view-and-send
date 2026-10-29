@@ -49,7 +49,8 @@ const sz=n=>n>1e9?(n/1e9).toFixed(1)+" GB":n>1e6?(n/1e6).toFixed(1)+" MB":Math.m
 const esc=s=>s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const dt=t=>t?new Date(t*1000).toLocaleString([],{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"}):"";
 function viewUrl(v){return v.kind==="url"?v.url:v.src||""}
-function rows(box,list){return list.length?list.map(f=>`<div class="row"><a href="/api/files/${box}/${encodeURIComponent(f.name)}" download><span class="name">${esc(f.name)}</span><small>${sz(f.size)}${(f.created||f.time)?" · "+dt(f.created||f.time):""}</small></a>${box==="outbox"&&window.AVSApp&&/\.apk$/i.test(f.name)?`<button data-i="${esc(f.name)}" style="color:var(--acc);border-color:var(--acc)">Install</button>`:""}<button data-b="${box}" data-n="${esc(f.name)}">Delete</button></div>`).join(""):`<div class="row"><small>Nothing yet</small></div>`}
+const inst={};   // apk name -> progress text while the Android app downloads it
+function rows(box,list){return list.length?list.map(f=>`<div class="row"><a href="/api/files/${box}/${encodeURIComponent(f.name)}" download><span class="name">${esc(f.name)}</span><small>${sz(f.size)}${(f.created||f.time)?" · "+dt(f.created||f.time):""}</small></a>${box==="outbox"&&window.AVSApp&&/\.apk$/i.test(f.name)?`<button data-i="${esc(f.name)}"${inst[f.name]?" disabled":""} style="color:var(--acc);border-color:var(--acc)">${esc(inst[f.name]||"Install")}</button>`:""}<button data-b="${box}" data-n="${esc(f.name)}">Delete</button></div>`).join(""):`<div class="row"><small>Nothing yet</small></div>`}
 function render(s,force){last=s;const v=s.view,src=viewUrl(v);
  if(v.rev!==seen.view||force&&!$("frame").src){ if(v.rev!==seen.view&&seen.view&&tab!=="view")$("dv").classList.add("on");
   seen.view=v.rev;if(!v.live)cur={};$("title").textContent=v.title||"Nothing shown yet";$("pos").textContent="";$("burger").hidden=true;$("empty").hidden=!!src;$("frame").hidden=!src;
@@ -73,7 +74,8 @@ let pollTimer=null;
 async function poll(){clearTimeout(pollTimer);if(document.hidden)return;                       // hidden (the app is in the background): no requests at all; alerts come through ntfy
  try{const r=await fetch("/api/state");if(r.ok)render(await r.json())}catch(e){}pollTimer=setTimeout(poll,2000)}
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)poll()});
-document.addEventListener("click",e=>{const i=e.target.closest("button[data-i]");if(i)window.AVSApp.install(i.dataset.i)});   // the Android app downloads it and opens the system installer
+window.avsInstall=(name,text)=>{if(text)inst[name]=text;else delete inst[name];if(last)$("outbox").innerHTML=rows("outbox",last.outbox)};   // called by the Android app
+document.addEventListener("click",e=>{const i=e.target.closest("button[data-i]");if(i&&!i.disabled)window.AVSApp.install(i.dataset.i)});   // the Android app downloads it and opens the system installer
 document.addEventListener("click",async e=>{const b=e.target.closest("button[data-b]");if(!b)return;
  if(confirm("Delete "+b.dataset.n+"?")){await fetch(`/api/files/${b.dataset.b}/${encodeURIComponent(b.dataset.n)}`,{method:"DELETE"});poll()}});
 async function up(files){if(!files.length)return;const fd=new FormData();for(const f of files)fd.append("files",f);$("msg").textContent="Sending "+files.length+" file(s)…";
