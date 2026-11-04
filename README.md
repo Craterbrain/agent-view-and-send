@@ -75,7 +75,9 @@ nowhere to send them) and not on pages shown with `avs show FILE.html` or a web 
 
 ### Housekeeping
 Opt-in: set `"outbox_keep_days": 7` in `~/.config/avs/config.json` and the server removes outbox files older than that every hour (0, the default, keeps everything;
-the inbox is never touched). In the app's Files tab an `.apk` in "From your agent" has an **Install** button: the app downloads it and opens the system installer (the
+the inbox is never touched). Pages built from Markdown are scrapped automatically `"view_keep_hours"` (default 2) after their last use: being shown, rebuilt after an
+edit, or opened on the phone. If the scrapped page was on screen, the View tab empties. The `.md` files are never touched, and `avs show` builds them again. 0 keeps them.
+In the app's Files tab an `.apk` in "From your agent" has an **Install** button: the app downloads it and opens the system installer (the
 first time, Android asks you to allow AVS to install apps).
 
 ## Safety
