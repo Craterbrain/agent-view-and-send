@@ -28,6 +28,7 @@ DEFAULTS = {
     "tunnel_only": False,            # True = never answer on the home network (plain http there): serve this PC only, and the phone uses the https tunnel everywhere. Needs "relay"; re-pair after changing it
     "max_upload_mb": 2048,
     "outbox_keep_days": 0,           # 0 = never delete anything; N = the server removes outbox files older than N days (also `avs clean`)
+    "view_keep_hours": 2,            # pages built from Markdown are scrapped this long after their last use (shown, rebuilt or opened); 0 = keep. Rebuilt from the .md on the next `avs show`
 }
 BOXES = ("outbox", "inbox")
 

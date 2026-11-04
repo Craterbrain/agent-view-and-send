@@ -325,6 +325,35 @@ def prune(root: Path, keep: str) -> None:
             shutil.rmtree(d, ignore_errors=True)
 
 
+def touch(root: Path, slot: str) -> None:
+    """Note that a built page was just used (opened on the phone): its marker's modification time is the last use."""
+    try:
+        os.utime(root / "view" / slot / MARKER)
+    except OSError:
+        pass                                         # not one `avs view` built, or already scrapped
+
+
+def scrap_idle(root: Path, hours: float) -> list[str]:
+    """Remove the pages `avs view` built (only those it marked) that have not been used for `hours`, and return their names.
+    If the one on screen goes, the View tab is emptied. The Markdown sources are untouched; `avs show` builds them again."""
+    if hours <= 0 or not (root / "view").is_dir():
+        return []
+    cutoff = time.time() - hours * 3600
+    showing = (core.get_state(root).get("path") or "").partition("/")[0]
+    gone = []
+    for d in (root / "view").iterdir():
+        try:
+            idle = d.is_dir() and (d / MARKER).stat().st_mtime < cutoff
+        except OSError:
+            continue
+        if idle:
+            shutil.rmtree(d, ignore_errors=True)
+            gone.append(d.name)
+    if showing in gone:
+        core.set_state(root, kind="none")
+    return gone
+
+
 def build(root: Path, site: Path, entry: str, title: str, live: bool = False) -> dict:
     slot = f"{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2)}"
     dest = root / "view" / slot

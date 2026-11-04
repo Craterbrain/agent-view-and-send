@@ -201,6 +201,29 @@ def test_view_follows_edits_and_prunes(env, tmp_path):
 
 
 @needs_hugo
+def test_idle_markdown_builds_are_scrapped_and_opening_one_counts_as_use(env, tmp_path):
+    import os, time
+    cfg, root, _ = env
+    from avs import view
+    c = authed(env)
+    assert cfg["view_keep_hours"] == 2
+    md = tmp_path / "a.md"; md.write_text("# Alpha\n\nbody")
+    st = view.run(root, [str(md)], "", False)
+    slot = st["path"].split("/")[0]
+    marker = root / "view" / slot / view.MARKER
+    other = root / "view" / "mine"; other.mkdir()                        # not built by `avs view`: never scrapped
+    past = time.time() - 3 * 3600
+    os.utime(marker, (past, past)); os.utime(other, (past, past))
+    assert c.get(f"/v/{cfg['token']}/{st['path']}").status_code == 200   # the phone opens it: that is a use
+    assert view.scrap_idle(root, 2) == [] and marker.exists()
+    os.utime(marker, (past, past))
+    assert view.scrap_idle(root, 0) == []                                # 0 keeps everything
+    assert view.scrap_idle(root, 2) == [slot] and not (root / "view" / slot).exists()
+    assert core.get_state(root)["kind"] == "none" and other.exists()     # it was on screen, so the View tab is emptied
+    assert md.exists() and view.run(root, [str(md)], "", False)["kind"] == "file"   # the source is untouched and builds again
+
+
+@needs_hugo
 def test_view_watcher_rebuilds_then_stops(env, tmp_path):
     import threading, time
     cfg, root, _ = env

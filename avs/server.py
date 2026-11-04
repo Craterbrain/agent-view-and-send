@@ -16,7 +16,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from . import core
+from . import core, view
 
 CORS = {"Access-Control-Allow-Origin": "*"}
 
@@ -164,7 +164,9 @@ def make_app(cfg: dict | None = None) -> FastAPI:
         p = core.inside(root / "view", path)
         if not p or not p.is_file():
             raise HTTPException(404)
-        return FileResponse(p, headers=CORS)             # a framed page has no origin of its own: its module scripts and fetches need this
+        if p.suffix == ".html":                          # opening a page counts as using it, so a Markdown build stays while it is read
+            view.touch(root, path.partition("/")[0])
+        return FileResponse(p, headers=CORS)            # a framed page has no origin of its own: its module scripts and fetches need this
 
     @app.get("/p/{tok}/{port}/{path:path}")
     async def passthrough(tok: str, port: int, path: str, request: Request):
@@ -214,14 +216,18 @@ def main():
     if cfg.get("tunnel_only") and not cfg["relay"]:
         raise SystemExit('avs: "tunnel_only" needs "relay": true, or nothing could reach this PC.')
 
-    def sweep():                                    # opt-in: outbox_keep_days > 0 in the config; re-read each time so a change applies at once
+    def sweep():                                    # the config is re-read each time so a change applies at once
+        n = 0
         while True:
-            days = core.load_config(create=False)["outbox_keep_days"]
+            now = core.load_config(create=False)
             try:
-                core.clean_outbox(core.root_of(cfg), days)
+                view.scrap_idle(core.root_of(cfg), now["view_keep_hours"])          # every 5 minutes: Markdown builds idle past view_keep_hours
+                if n % 12 == 0:                                                     # hourly, opt-in: outbox files older than outbox_keep_days
+                    core.clean_outbox(core.root_of(cfg), now["outbox_keep_days"])
             except OSError:
                 pass
-            time.sleep(3600)
+            n += 1
+            time.sleep(300)
     threading.Thread(target=sweep, daemon=True).start()
     if cfg["relay"]:
         threading.Thread(target=relay.run_forever, args=(cfg, threading.Event()), daemon=True).start()
