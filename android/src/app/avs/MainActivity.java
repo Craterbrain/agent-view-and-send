@@ -8,6 +8,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
@@ -16,7 +17,11 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.OpenableColumns;
+import android.text.SpannableString;
+import android.text.Spanned;
 import android.text.TextUtils;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.RelativeSizeSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.Menu;
@@ -59,12 +64,17 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> chooser;
     private String base = "";
     private boolean resolving = false;
-    private TextView barMenu, barTitle, barPos;       // the action bar: hamburger, the page's title, its position
-    private String barText = "AVS", barUrl = "";
+    private TextView barMenu, barTitle, barPos, barUse, barAct;   // the action bar: hamburger, the page's title, its position, an action button
+    private String barText = "AVS", barUrl = "", appVersion = "";
     private static final int PICK = 7;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
+        try {
+            appVersion = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (PackageManager.NameNotFoundException ignored) {
+            // The title can still be shown if the package record is unavailable.
+        }
         prefs = getSharedPreferences("avs", MODE_PRIVATE);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -99,6 +109,13 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface public void install(String name) { ui.post(() -> installApk(name)); }
             // The page tells the bar what it shows: its title and position, whether it has a contents menu, and the address for "Open in browser".
             @android.webkit.JavascriptInterface public void bar(String title, String pos, boolean nav, String url) { ui.post(() -> setBar(title, pos, nav, url)); }
+            // The buttons at the right of the bar, a comma list: "usage" (calls the page's avsUsage()), "new" (a new chat: avsAction()); "" for none.
+            @android.webkit.JavascriptInterface public void barActions(String kinds) { ui.post(() -> {
+                java.util.List<String> k = java.util.Arrays.asList((kinds == null ? "" : kinds).split(","));
+                barUse.setVisibility(k.contains("usage") ? View.VISIBLE : View.GONE);
+                barAct.setVisibility(k.contains("new") ? View.VISIBLE : View.GONE);
+            }); }
+            @android.webkit.JavascriptInterface public void barAction(String kind) { barActions(kind); }   // pages written for app 1.5
         }, "AVSApp");
         web.setDownloadListener((url, ua, cd, mime, len) -> {
             DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
@@ -143,9 +160,9 @@ public class MainActivity extends Activity {
         barMenu.setVisibility(View.GONE);
         barMenu.setLayoutParams(new LinearLayout.LayoutParams((int) (48 * d), ViewGroup.LayoutParams.MATCH_PARENT));
         barTitle = new TextView(c);
-        barTitle.setText(barText);
         barTitle.setTextSize(18);
         barTitle.setTextColor(ink);
+        barTitle.setText(formattedBarTitle());
         barTitle.setTypeface(barTitle.getTypeface(), android.graphics.Typeface.BOLD);
         barTitle.setSingleLine(true);
         barTitle.setEllipsize(TextUtils.TruncateAt.END);
@@ -156,24 +173,44 @@ public class MainActivity extends Activity {
         barPos.setTextColor(ink);
         barPos.setAlpha(0.6f);
         barPos.setPadding(0, 0, (int) (6 * d), 0);
+        barUse = new TextView(c);
+        barUse.setText("\u25A5");                              // usage: tokens, cost, context and limit notices
+        barUse.setTextSize(20);
+        barUse.setTextColor(ink);
+        barUse.setGravity(Gravity.CENTER);
+        barUse.setVisibility(View.GONE);
+        barUse.setContentDescription("Usage");
+        barUse.setLayoutParams(new LinearLayout.LayoutParams((int) (44 * d), ViewGroup.LayoutParams.MATCH_PARENT));
+        barUse.setOnClickListener(v -> web.evaluateJavascript("window.avsUsage&&avsUsage()", null));
+        barAct = new TextView(c);
+        barAct.setText("\u270E");                              // a pencil: new chat, as in the Claude app
+        barAct.setTextSize(21);
+        barAct.setTextColor(ink);
+        barAct.setGravity(Gravity.CENTER);
+        barAct.setVisibility(View.GONE);
+        barAct.setContentDescription("New chat");
+        barAct.setLayoutParams(new LinearLayout.LayoutParams((int) (48 * d), ViewGroup.LayoutParams.MATCH_PARENT));
+        barAct.setOnClickListener(v -> web.evaluateJavascript("window.avsAction&&avsAction()", null));
         row.addView(barMenu);
         row.addView(barTitle);
         row.addView(barPos);
+        row.addView(barUse);
+        row.addView(barAct);
         final float[] down = new float[3];                  // x, y, how far it has been pulled
         row.setOnTouchListener((v, e) -> {
             switch (e.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN: down[0] = e.getX(); down[1] = e.getY(); down[2] = 0; return true;
                 case MotionEvent.ACTION_MOVE:
                     down[2] = e.getY() - down[1];
-                    barTitle.setText(down[2] >= 80 * d ? "Release to refresh" : barText);
+                    barTitle.setText(down[2] >= 80 * d ? "Release to refresh" : formattedBarTitle());
                     return true;
                 case MotionEvent.ACTION_UP:
-                    barTitle.setText(barText);
+                    barTitle.setText(formattedBarTitle());
                     if (down[2] >= 80 * d) web.evaluateJavascript("window.avsRefresh&&avsRefresh()", null);
                     else if (Math.abs(down[2]) < 12 * d && down[0] < 52 * d && barMenu.getVisibility() == View.VISIBLE)
                         web.evaluateJavascript("window.avsMenu&&avsMenu()", null);
                     return true;
-                case MotionEvent.ACTION_CANCEL: barTitle.setText(barText); return true;
+                case MotionEvent.ACTION_CANCEL: barTitle.setText(formattedBarTitle()); return true;
             }
             return false;
         });
@@ -183,9 +220,20 @@ public class MainActivity extends Activity {
         ab.setCustomView(row, new ActionBar.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     }
 
+    private CharSequence formattedBarTitle() {
+        if (!"AVS".equals(barText) || TextUtils.isEmpty(appVersion)) return barText;
+        String title = barText + "  " + appVersion;
+        SpannableString text = new SpannableString(title);
+        int start = barText.length() + 2;
+        text.setSpan(new RelativeSizeSpan(2f / 3f), start, title.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        text.setSpan(new ForegroundColorSpan((barTitle.getCurrentTextColor() & 0x00ffffff) | 0xb0000000),
+            start, title.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        return text;
+    }
+
     private void setBar(String title, String pos, boolean nav, String url) {
         barText = title == null || title.isEmpty() ? "AVS" : title;
-        barTitle.setText(barText);
+        barTitle.setText(formattedBarTitle());
         barPos.setText(pos == null ? "" : pos);
         barMenu.setVisibility(nav ? View.VISIBLE : View.GONE);
         barUrl = url == null ? "" : url;
@@ -489,5 +537,12 @@ public class MainActivity extends Activity {
             prefs.edit().clear().apply(); base = ""; web.loadUrl("about:blank"); setBar("AVS", "", false, ""); showMode(); }).setNegativeButton("Cancel", null).show();
         return true;
     }
-    @Override public void onBackPressed() { if (web.getVisibility() == View.VISIBLE && web.canGoBack()) web.goBack(); else moveTaskToBack(true); }
+    /** Back closes what the page has open first (the chat drawer, a sheet), then goes back in the page, then leaves the app. */
+    @Override public void onBackPressed() {
+        if (web.getVisibility() != View.VISIBLE) { moveTaskToBack(true); return; }
+        web.evaluateJavascript("!!(window.avsBack&&avsBack())", r -> {
+            if ("true".equals(r)) return;
+            if (web.canGoBack()) web.goBack(); else moveTaskToBack(true);
+        });
+    }
 }

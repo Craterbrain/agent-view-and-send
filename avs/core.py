@@ -29,6 +29,10 @@ DEFAULTS = {
     "max_upload_mb": 2048,
     "outbox_keep_days": 0,           # 0 = never delete anything; N = the server removes outbox files older than N days (also `avs clean`)
     "view_keep_hours": 2,            # pages built from Markdown are scrapped this long after their last use (shown, rebuilt or opened); 0 = keep. Rebuilt from the .md on the next `avs show`
+    "opencode_url": "",              # optional OpenCode web UI on this PC; AVS proxies it through the pairing tunnel, e.g. http://127.0.0.1:4096/
+    "opencode_directory": "",        # project directory used when the OpenCode tab starts a conversation
+    "codex": "codex",                # the Codex CLI the Codex tab runs (`codex app-server`); the tab is hidden when it is not found
+    "codex_directory": "",           # project directory for new Codex chats; empty = the home folder
 }
 BOXES = ("outbox", "inbox")
 

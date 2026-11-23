@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 SDK=${ANDROID_HOME:-$HOME/Android/sdk}; BT=$SDK/build-tools/35.0.0; JAR=$SDK/platforms/android-35/android.jar
 rm -rf build && mkdir -p build/gen build/classes
 $BT/aapt2 compile --dir res -o build/res.zip
-$BT/aapt2 link -o build/base.apk -I $JAR --manifest AndroidManifest.xml --min-sdk-version 26 --target-sdk-version 34 --version-code 5 --version-name 1.4 --java build/gen build/res.zip
+$BT/aapt2 link -o build/base.apk -I $JAR --manifest AndroidManifest.xml --min-sdk-version 26 --target-sdk-version 34 --version-code 7 --version-name 1.6 --java build/gen build/res.zip
 javac --release 17 -cp $JAR -d build/classes $(find src build/gen -name '*.java') 2>&1 | grep -v '^Note:' || true
 $BT/d8 --release --lib $JAR --min-api 26 --output build $(find build/classes -name '*.class')
 cp build/base.apk build/unsigned.apk && (cd build && zip -q unsigned.apk classes.dex)

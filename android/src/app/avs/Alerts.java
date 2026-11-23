@@ -25,7 +25,7 @@ final class Alerts {
     static void show(Context c, String title, String text) {
         channels(c);
         String tab = title.startsWith("File") ? "files" : "view";
-        Notification n = new Notification.Builder(c, "events").setSmallIcon(R.drawable.ic_launcher).setContentTitle(title)
+        Notification n = new Notification.Builder(c, "events").setSmallIcon(R.drawable.ic_notification).setContentTitle(title)
             .setContentText(text).setAutoCancel(true).setContentIntent(open(c, tab)).build();
         c.getSystemService(NotificationManager.class).notify((int) (System.currentTimeMillis() & 0x7fffffff), n);
     }

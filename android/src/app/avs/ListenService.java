@@ -25,7 +25,7 @@ public class ListenService extends Service {
 
     @Override public int onStartCommand(Intent i, int flags, int id) {
         Alerts.channels(this);
-        Notification n = new Notification.Builder(this, "listen").setSmallIcon(R.drawable.ic_launcher).setContentTitle("AVS is listening")
+        Notification n = new Notification.Builder(this, "listen").setSmallIcon(R.drawable.ic_notification).setContentTitle("AVS is listening")
             .setContentIntent(Alerts.open(this, "view")).build();
         startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         if (!running) {

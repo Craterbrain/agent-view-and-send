@@ -13,15 +13,35 @@ import re
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 
-from . import core, view
+from . import codex, core, view
 
 CORS = {"Access-Control-Allow-Origin": "*"}
 
 STATIC = Path(__file__).parent / "static"
 COOKIE = "avs"
+OC_PREFIX = "/oc"
+
+
+def opencode_html(text: str) -> str:
+    """Keep the app's root-relative assets on AVS rather than escaping the proxy mount, and load the event-stream shim before the app."""
+    text = re.sub(r'(\b(?:src|href|action|poster)=["\'])/(?!/)', lambda m: m.group(1) + OC_PREFIX + "/", text)
+    shim = '<script src="/static/oc-stream.js"></script>'
+    return re.sub(r'<head[^>]*>', lambda m: m.group(0) + shim, text, count=1) if shim not in text else text
+
+
+def opencode_javascript(text: str) -> str:
+    """OpenCode's production bundle assumes an origin root; adapt its server, router and Vite preload base."""
+    text = re.sub(r'(\w+=\(\)=>location\.hostname\.includes\("opencode\.ai"\)\?"http://localhost:4096":location\.origin)',
+                  lambda m: m.group(1) + f'+"{OC_PREFIX}"', text)
+    text = re.sub(r'f\((\w+),\{get component\(\)\{return (\w+)\.router\?\?(\w+)\}',
+                  lambda m: 'f(' + m[1] + ',{base:"' + OC_PREFIX + '",get component(){return ' + m[2] + '.router??' + m[3] + '}', text)
+    text = re.sub(r'(\w+)=function\((\w+)\)\{return"/"\+\2\}',
+                  lambda m: m[1] + '=function(' + m[2] + '){return"' + OC_PREFIX + '/"+' + m[2] + '}', text)
+    # Asset paths written as literals (web workers, the icon sprite) do not go through the patched base above
+    return re.sub(r'(["\'`])/assets/', lambda m: m.group(1) + OC_PREFIX + "/assets/", text)
 
 
 def make_app(cfg: dict | None = None) -> FastAPI:
@@ -65,7 +85,7 @@ def make_app(cfg: dict | None = None) -> FastAPI:
     @app.get("/manifest.webmanifest")
     def manifest():
         return JSONResponse({"name": "Agent View and Send", "short_name": "AVS", "start_url": "/", "display": "standalone",
-                             "background_color": "#101418", "theme_color": "#101418",
+                             "background_color": "#15171a", "theme_color": "#15171a",
                              "icons": [{"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]},
                             media_type="application/manifest+json")
 
@@ -76,6 +96,84 @@ def make_app(cfg: dict | None = None) -> FastAPI:
             raise HTTPException(404)
         return FileResponse(p)
 
+    def opencode_target():
+        from urllib.parse import unquote, urlsplit, urlunsplit
+        raw = cfg.get("opencode_url", "")
+        if not raw:
+            return None
+        u = urlsplit(raw)
+        if u.scheme not in ("http", "https") or not u.hostname:
+            return None
+        base = urlunsplit((u.scheme, u.netloc.rsplit("@", 1)[-1], "", "", ""))
+        auth = (unquote(u.username or "opencode"), unquote(u.password or "")) if u.password else None
+        return base, auth, u.path
+
+    bridge = {}
+
+    def codex_directory() -> str:
+        return cfg.get("codex_directory") or str(Path.home())
+
+    @app.websocket("/codex-ws")
+    async def codex_socket(websocket: WebSocket):
+        """The Codex tab's one connection: JSON requests in (answered by id), Codex's notifications and questions out."""
+        import asyncio
+        import contextlib
+        if not websocket.client or not core.allowed(websocket.client.host, cfg) or not ok(websocket.cookies.get(COOKIE)):
+            await websocket.close(code=4401)
+            return
+        binary = codex.find(cfg)
+        if not binary:
+            await websocket.close(code=4404)
+            return
+        if "b" not in bridge:
+            bridge["b"] = codex.Bridge(binary, codex_directory())
+        b = bridge["b"]
+        await websocket.accept()
+        queue: asyncio.Queue = asyncio.Queue()
+        b.listeners.add(queue)
+        for ask in b.pending():
+            queue.put_nowait(ask)
+
+        async def to_phone():
+            while True:
+                await websocket.send_json(await queue.get())
+
+        async def run(msg):
+            try:
+                params = msg.get("params") or {}
+                if msg["method"] == "thread/start":
+                    params.setdefault("cwd", codex_directory())
+                    params.setdefault("serviceName", "avs")
+                reply = {"id": msg["id"], "result": await b.call(msg["method"], params)}
+            except codex.RpcError as e:
+                reply = {"id": msg["id"], "error": {"message": str(e)}}
+            except Exception as e:
+                reply = {"id": msg["id"], "error": {"message": f"Could not reach Codex: {e}"}}
+            with contextlib.suppress(Exception):
+                await websocket.send_json(reply)
+
+        sender = asyncio.create_task(to_phone())
+        jobs: set = set()
+        try:
+            while True:
+                msg = await websocket.receive_json()
+                if not isinstance(msg, dict):
+                    continue
+                if "answer" in msg and isinstance(msg.get("result"), dict):
+                    await b.answer(msg["answer"], msg["result"])
+                elif isinstance(msg.get("method"), str) and "id" in msg:
+                    job = asyncio.create_task(run(msg))
+                    jobs.add(job)
+                    job.add_done_callback(jobs.discard)
+        except Exception:
+            pass
+        finally:
+            b.listeners.discard(queue)
+            for t in (sender, *jobs):
+                t.cancel()
+            with contextlib.suppress(RuntimeError):
+                await websocket.close()
+
     @app.get("/api/state")
     def state():
         st = core.get_state(root)
@@ -84,7 +182,10 @@ def make_app(cfg: dict | None = None) -> FastAPI:
             view["src"] = f"/v/{token}/{st['path']}"
         elif st.get("kind") == "proxy":
             view["src"] = f"/p/{token}/{st['port']}/{st.get('rest', '')}"
-        return {"view": view, "outbox": core.listing(root, "outbox"), "inbox": core.listing(root, "inbox")}
+        target = opencode_target()
+        return {"view": view, "outbox": core.listing(root, "outbox"), "inbox": core.listing(root, "inbox"),
+                "opencode_url": OC_PREFIX + target[2] if target else "", "opencode_directory": cfg.get("opencode_directory", "") if target else "",
+                "codex": bool(codex.find(cfg)), "codex_directory": codex_directory()}
 
     def box_file(box: str, name: str) -> Path:
         if box not in core.BOXES:
@@ -104,6 +205,164 @@ def make_app(cfg: dict | None = None) -> FastAPI:
         box_file(box, name).unlink()
         return {"ok": True}
 
+    @app.api_route(OC_PREFIX, methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], include_in_schema=False)
+    @app.api_route(OC_PREFIX + "/{path:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], include_in_schema=False)
+    async def opencode_proxy(request: Request, path: str = ""):
+        """The whole OpenCode app, not just its session API, travels through AVS's pairing cookie and tunnel."""
+        import base64
+        import httpx
+        target = opencode_target()
+        if not target:
+            raise HTTPException(503, "OpenCode is not configured")
+        base, auth, _ = target
+        hop = {"host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade", "cookie", "authorization", "origin", "referer"}
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in hop}
+        headers["Origin"] = base
+        if auth:
+            headers["Authorization"] = "Basic " + base64.b64encode((auth[0] + ":" + auth[1]).encode()).decode()
+        params = [(k, v) for k, v in request.query_params.multi_items() if k != "t"]
+        client = httpx.AsyncClient(timeout=httpx.Timeout(30, read=None))
+        try:
+            up = await client.send(client.build_request(request.method, base + "/" + path, params=params, headers=headers,
+                                                        content=request.stream()), stream=True)
+        except httpx.HTTPError as e:
+            await client.aclose()
+            raise HTTPException(502, f"Could not reach OpenCode: {e}")
+
+        content_type = up.headers.get("content-type", "")
+        rewrite = "html" in content_type or "javascript" in content_type or "css" in content_type or path.endswith((".html", ".js", ".css"))
+        drop = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"}
+        if rewrite:
+            drop |= {"content-length", "content-encoding", "etag", "content-md5"}
+        out_headers = {k: v for k, v in up.headers.items() if k.lower() not in drop}
+        location = up.headers.get("location", "")
+        if location.startswith("/") and not location.startswith("//"):
+            out_headers["location"] = OC_PREFIX + location
+        if rewrite:
+            raw = await up.aread()
+            await up.aclose(); await client.aclose()
+            text = raw.decode("utf-8", "replace")
+            if "html" in content_type or path.endswith(".html"):
+                text = opencode_html(text)
+            elif "css" in content_type or path.endswith(".css"):
+                text = re.sub(r'(url\(["\']?)/(?!/)', lambda m: m.group(1) + OC_PREFIX + "/", text)
+            else:
+                text = opencode_javascript(text)
+            return Response(text.encode(), status_code=up.status_code, headers=out_headers)
+
+        async def body():
+            try:
+                async for chunk in up.aiter_raw():
+                    yield chunk
+            finally:
+                await up.aclose()
+                await client.aclose()
+        return StreamingResponse(body(), status_code=up.status_code, headers=out_headers)
+
+    @app.websocket("/oc-stream/{path:path}")
+    async def opencode_stream(websocket: WebSocket, path: str):
+        """One of OpenCode's event streams (/event, /global/event, ...) carried over a WebSocket. Cloudflare's quick tunnel holds a streamed
+        HTTP response back until tens of KB have built up, so OpenCode's small live events never reached the phone away from home;
+        WebSocket frames pass through at once. Each message is a piece of the upstream text/event-stream, unchanged."""
+        import asyncio
+        import contextlib
+        import httpx
+        if not websocket.client or not core.allowed(websocket.client.host, cfg) or not ok(websocket.cookies.get(COOKIE)):
+            await websocket.close(code=4401)
+            return
+        target = opencode_target()
+        if not target or not path.endswith("event"):                    # event streams only; everything else uses the HTTP proxy
+            await websocket.close(code=4404)
+            return
+        base, auth, _ = target
+        params = [(k, v) for k, v in websocket.query_params.multi_items() if k != "t"]
+        headers = {"Accept": "text/event-stream", "Accept-Encoding": "identity"}
+        directory = websocket.query_params.get("directory") or cfg.get("opencode_directory")
+        if directory:
+            headers["x-opencode-directory"] = directory
+        await websocket.accept()
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=None), auth=auth) as client:
+                async with client.stream("GET", base + "/" + path, params=params, headers=headers) as up:
+                    if up.status_code != 200:
+                        await websocket.close(code=4502, reason=f"OpenCode answered {up.status_code}")
+                        return
+
+                    async def pump():
+                        async for chunk in up.aiter_text():
+                            await websocket.send_text(chunk)
+
+                    async def watch():
+                        while (await websocket.receive())["type"] != "websocket.disconnect":
+                            pass
+
+                    tasks = [asyncio.create_task(pump()), asyncio.create_task(watch())]
+                    try:
+                        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                    finally:
+                        for task in tasks:
+                            task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+        except httpx.HTTPError:
+            with contextlib.suppress(RuntimeError):
+                await websocket.close(code=1011, reason="Could not reach OpenCode")
+            return
+        with contextlib.suppress(RuntimeError):
+            await websocket.close()
+
+    @app.websocket(OC_PREFIX + "/{path:path}")
+    async def opencode_websocket(websocket: WebSocket, path: str):
+        """HTTP middleware does not guard upgrades, so check the same AVS cookie and peer network here."""
+        import asyncio
+        import base64
+        import contextlib
+        from urllib.parse import urlencode
+        import websockets
+        if not websocket.client or not core.allowed(websocket.client.host, cfg) or not ok(websocket.cookies.get(COOKIE)):
+            await websocket.close(code=4401)
+            return
+        target = opencode_target()
+        if not target:
+            await websocket.close(code=4503)
+            return
+        base, auth, _ = target
+        query = urlencode([(k, v) for k, v in websocket.query_params.multi_items() if k != "t"])
+        uri = ("wss:" if base.startswith("https:") else "ws:") + base.split(":", 1)[1] + "/" + path + (("?" + query) if query else "")
+        headers = {"Authorization": "Basic " + base64.b64encode((auth[0] + ":" + auth[1]).encode()).decode()} if auth else {}
+        await websocket.accept()
+        try:
+            async with websockets.connect(uri, origin=base, additional_headers=headers, proxy=None, max_size=None) as upstream:
+                async def downstream():
+                    async for message in upstream:
+                        if isinstance(message, bytes):
+                            await websocket.send_bytes(message)
+                        else:
+                            await websocket.send_text(message)
+
+                async def upstream_messages():
+                    while True:
+                        message = await websocket.receive()
+                        if message["type"] == "websocket.disconnect":
+                            return
+                        if message.get("text") is not None:
+                            await upstream.send(message["text"])
+                        elif message.get("bytes") is not None:
+                            await upstream.send(message["bytes"])
+
+                tasks = [asyncio.create_task(downstream()), asyncio.create_task(upstream_messages())]
+                try:
+                    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+        except Exception:
+            with contextlib.suppress(RuntimeError):
+                await websocket.close(code=1011)
+            raise
+        with contextlib.suppress(RuntimeError):
+            await websocket.close()
+
     @app.post("/api/push")
     async def push(request: Request):
         """The phone says where its push distributor wants alerts ("" = back to the ntfy topic)."""
@@ -119,7 +378,7 @@ def make_app(cfg: dict | None = None) -> FastAPI:
     @app.post("/api/upload")
     async def upload(files: list[UploadFile] = File(...)):
         limit = cfg["max_upload_mb"] * 1024 * 1024
-        saved = []
+        saved, paths = [], []
         for f in files:
             dest = core.unique(root / "inbox", f.filename or "file")
             size = 0
@@ -134,10 +393,11 @@ def make_app(cfg: dict | None = None) -> FastAPI:
                 dest.unlink(missing_ok=True)
                 raise
             saved.append(dest.name)
+            paths.append(str(dest))
         import shutil, subprocess
         if shutil.which("notify-send"):                              # a desktop note on the PC too
             subprocess.Popen(["notify-send", "-a", "AVS", "File from your phone", ", ".join(saved)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return {"saved": saved}
+        return {"saved": saved, "paths": paths}
 
     @app.get("/api/comments")
     def comments_get(page: str = ""):
